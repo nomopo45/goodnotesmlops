@@ -16,7 +16,7 @@ jobs:
       - name: Create 2-node KinD Cluster
         uses: helm/kind-action@v1.10.0
         with:
-          config: kind-config.yaml
+          config: kind-config/kind-config.yaml
           cluster_name: ci-cluster
 
       - name: Verify Cluster and Nodes
