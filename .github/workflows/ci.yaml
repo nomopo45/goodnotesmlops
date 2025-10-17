@@ -126,7 +126,7 @@ jobs:
             echo "Expected 404 for invalid hostname, got: $HTTP_CODE"
           fi
 
-            - name: Setup k6
+      - name: Setup k6
         uses: grafana/setup-k6-action@v1
 
       - name: Run k6 load test
