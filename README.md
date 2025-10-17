@@ -27,3 +27,101 @@ Change kubernetes Ingress and the test in the ci.yaml accordingly
 
 Choose k6 because of : https://docs.gitlab.com/ci/testing/load_performance_testing/
 Then following doc + AI to do the load test and add PR comment.
+
+# Overview
+
+This project implements a production-ready CI/CD pipeline that:
+
+1. **Provisions Infrastructure** - Multi-node Kubernetes cluster using KinD
+2. **Deploys Services** - Two microservices with host-based routing
+3. **Configures Ingress** - NGINX Ingress Controller for traffic management
+4. **Performs Load Testing** - Automated performance testing with k6
+5. **Reports Results** - Automated PR comments with test metrics
+
+### Key Features
+
+- ✅ **Multi-node Kubernetes cluster** (1 control-plane + 2 workers)
+- ✅ **Host-based ingress routing** (foo.localhost, bar.localhost)
+- ✅ **Automated load testing** with randomized traffic distribution
+- ✅ **PR-integrated reporting** with performance metrics
+- ✅ **Comprehensive validation** at every pipeline stage
+
+---
+
+## 🏗️ Architecture
+
+```
+
+┌─────────────────────────────────────────────────────────────┐
+│                     GitHub Actions Runner                    │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │           KinD Kubernetes Cluster (localhost)         │  │
+│  │                                                        │  │
+│  │  ┌──────────────┐                                     │  │
+│  │  │ Control-Plane│  NGINX Ingress Controller          │  │
+│  │  │    Node      │  (hostPort: 80/443)                │  │
+│  │  └──────────────┘                                     │  │
+│  │         │                                              │  │
+│  │    ┌────┴────┐                                        │  │
+│  │  ┌─▼─┐    ┌─▼─┐                                      │  │
+│  │  │W1 │    │W2 │  Worker Nodes                        │  │
+│  │  └───┘    └───┘                                       │  │
+│  │    │        │                                         │  │
+│  │  ┌─▼────┬───▼─┐                                      │  │
+│  │  │ foo  │ bar │  Deployments (2 replicas each)      │  │
+│  │  │ pods │ pods│  http-echo containers                │  │
+│  │  └──────┴─────┘                                       │  │
+│  └───────────────────────────────────────────────────────┘  │
+│                                                              │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │  k6 Load Tester                                       │  │
+│  │  - Randomized traffic: foo.localhost / bar.localhost │  │
+│  │  - 20 virtual users                                   │  │
+│  │  - 2-minute duration                                  │  │
+│  └───────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+│
+▼
+┌─────────────────┐
+│  Pull Request   │
+│  with Results   │
+└─────────────────┘
+
+```
+
+### Traffic Flow
+
+```
+
+User Request → NGINX Ingress (Port 80)
+↓
+[Host Header Check]
+↓
+┌────────┴────────┐
+▼                 ▼
+foo.localhost    bar.localhost
+▼                 ▼
+foo-service      bar-service
+▼                 ▼
+foo pods         bar pods
+▼                 ▼
+Response: "foo"  Response: "bar"
+
+```
+
+---
+
+## 📦 Prerequisites
+
+- **GitHub Repository** with Actions enabled
+- **Git** installed locally
+- **Basic knowledge** of Kubernetes, Docker, and CI/CD
+
+### For Local Testing (Optional)
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+- [KinD](https://kind.sigs.k8s.io/docs/user/quick-start/)
+- [kubectl](https://kubernetes.io/docs/tasks/tools/)
+- [k6](https://k6.io/docs/get-started/installation/)
+
+---
