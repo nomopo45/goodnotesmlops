@@ -59,7 +59,7 @@ This project implements a production-ready CI/CD pipeline that:
 │  │                                                        │  │
 │  │  ┌──────────────┐                                     │  │
 │  │  │ Control-Plane│  NGINX Ingress Controller          │  │
-│  │  │    Node      │  (hostPort: 80/443)                │  │
+│  │  │    Node      │  (hostPort: 80)                │  │
 │  │  └──────────────┘                                     │  │
 │  │         │                                              │  │
 │  │    ┌────┴────┐                                        │  │
