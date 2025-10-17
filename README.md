@@ -111,7 +111,7 @@ Response: "foo"  Response: "bar"
 
 ---
 
-## 📦 Prerequisites
+## Prerequisites
 
 - **GitHub Repository** with Actions enabled
 - **Git** installed locally
@@ -123,5 +123,26 @@ Response: "foo"  Response: "bar"
 - [KinD](https://kind.sigs.k8s.io/docs/user/quick-start/)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - [k6](https://k6.io/docs/get-started/installation/)
+
+---
+
+## Project Structure
+
+```
+
+.
+├── .github/
+│   ├── workflows/
+│   |   └── ci.yaml                    \# Main CI/CD pipeline
+├── kind-config/
+|   └── kind-config.yaml              \# KinD cluster configuration
+├── k8s/
+│   ├── k8s-http-echo-deploy.yaml    \# Foo \& Bar deployments + services
+│   └── k8s-http-echo-ingress.yaml        \# Host-based ingress routing
+├── k6/
+│   └── load-test.js                  \# k6 load testing script
+└── README.md                         
+
+```
 
 ---
