@@ -53,7 +53,7 @@ jobs:
       - name: Deploy foo and bar applications
         run: |
           echo "Deploying foo and bar applications..."
-          kubectl apply -f k8s/http-echo-deployments.yaml
+          kubectl apply -f k8s/k8s-http-echo-deploy.yaml
           
           echo "Waiting for deployments to be ready..."
           kubectl rollout status deployment/foo-app --timeout=2m
@@ -77,7 +77,7 @@ jobs:
       - name: Create Ingress for http-echo
         run: |
           echo "Creating Ingress resource..."
-          kubectl apply -f k8s/http-echo-ingress.yaml
+          kubectl apply -f k8s/k8s-http-echo-ingress.yaml
           
           echo "Waiting for Ingress to be ready..."
           sleep 10
