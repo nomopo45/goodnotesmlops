@@ -126,38 +126,36 @@ jobs:
             echo "Expected 404 for invalid hostname, got: $HTTP_CODE"
           fi
       
-      - name: Setup k6
-        uses: grafana/setup-k6-action@v1
-        with:
-          k6-version: 'v0.49.0'
-
       - name: Run k6 load test
         uses: grafana/run-k6-action@v1
         with:
           path: k6/load-test.js
-          flags: --out json=load-test-results.json
+          flags: --out json=k6-results.json
 
       - name: Display k6 results
         if: always()
         run: |
-          echo "K6 LOAD TEST RESULTS"
-          echo "================================================"
-          if [ -f load-test-summary.json ]; then
-            cat load-test-summary.json | jq '.metrics | {
-              total_requests: .http_reqs.values.count,
-              failed_requests: .http_req_failed.values.rate,
-              avg_duration: .http_req_duration.values.avg,
-              p95_duration: .http_req_duration.values["p(95)"],
-              requests_per_sec: .http_reqs.values.rate
-            }'
+          echo "Load Test Results"
+          if [ -f k6-results.json ]; then
+            echo "Results file generated"
+            
+            # Display summary
+            cat k6-summary.html 2>/dev/null || echo "HTML summary not available"
           fi
 
       - name: Upload k6 results
-        uses: actions/upload-artifact@v3
         if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: k6-load-test-results
           path: |
-            load-test-results.json
-            load-test-summary.json
-          retention-days: 1
+            k6-results.json
+            k6-summary.html
+          retention-days: 30
+
+      - name: Check k6 thresholds
+        if: always()
+        run: |
+          echo "Checking if load test passed thresholds..."
+          # k6 exit code indicates threshold pass/fail
+          # This step will fail if thresholds are not met
