@@ -26,16 +26,21 @@ const BASE_URL = 'http://localhost';
 const HOSTS = ['foo.localhost', 'bar.localhost'];
 
 export default function () {
-  // Randomly select a host
   const selectedHost = HOSTS[Math.floor(Math.random() * HOSTS.length)];
   
-  // Make request with Host header
   const response = http.get(BASE_URL, {
-    headers: {
-      'Host': selectedHost,
-    },
-    tags: { hostname: selectedHost }, // Tag for better metrics
+    headers: { 'Host': selectedHost },
+    tags: { hostname: selectedHost },
   });
+  
+  check(response, {
+    'status is 200': (r) => r.status === 200,
+    'response time < 500ms': (r) => r.timings.duration < 500,
+    'correct content': (r) => r.body.includes(selectedHost.split('.')[0]),
+  });
+  
+  sleep(Math.random() * 1.5 + 0.5);
+}
   
   // Check response
   const checkResult = check(response, {
@@ -62,8 +67,8 @@ export default function () {
 export function handleSummary(data) {
   return {
     'stdout': textSummary(data, { indent: ' ', enableColors: true }),
-    'k6-results.json': JSON.stringify(data),
-    'k6-summary.html': htmlReport(data),
+    '/scripts/k6-summary.json': JSON.stringify(data),
+    '/scripts/k6-results.html': htmlReport(data),
   };
 }
 

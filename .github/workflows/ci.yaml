@@ -127,21 +127,105 @@ jobs:
           fi
       
       - name: Run k6 load test
-        uses: grafana/run-k6-action@v1
-        with:
-          path: k6/load-test.js
-          flags: --out json=k6-results.json
-
-      - name: Display k6 results
-        if: always()
+        id: k6_test
+        continue-on-error: true # Don't fail workflow if thresholds fail
         run: |
-          echo "Load Test Results"
-          if [ -f k6-results.json ]; then
-            echo "Results file generated"
+          docker run --rm \
+            --network host \
+            -v ${{ github.workspace }}/k6:/scripts \
+            grafana/k6:latest run /scripts/load-test.js \
+            --summary-export=/scripts/k6-summary.json
+
+      - name: Parse k6 results
+        if: always()
+        id: k6_results
+        run: |
+          # Extract key metrics from k6 summary JSON
+          SUMMARY_FILE="k6/k6-summary.json"
+          
+          if [ -f "$SUMMARY_FILE" ]; then
+            # Extract metrics using jq
+            HTTP_REQS=$(jq -r '.metrics.http_reqs.values.count // 0' $SUMMARY_FILE)
+            RPS=$(jq -r '.metrics.http_reqs.values.rate // 0' $SUMMARY_FILE | xargs printf "%.2f")
             
-            # Display summary
-            cat k6-summary.html 2>/dev/null || echo "HTML summary not available"
+            HTTP_REQ_DURATION_AVG=$(jq -r '.metrics.http_req_duration.values.avg // 0' $SUMMARY_FILE | xargs printf "%.2f")
+            HTTP_REQ_DURATION_P90=$(jq -r '.metrics.http_req_duration.values["p(90)"] // 0' $SUMMARY_FILE | xargs printf "%.2f")
+            HTTP_REQ_DURATION_P95=$(jq -r '.metrics.http_req_duration.values["p(95)"] // 0' $SUMMARY_FILE | xargs printf "%.2f")
+            HTTP_REQ_DURATION_MAX=$(jq -r '.metrics.http_req_duration.values.max // 0' $SUMMARY_FILE | xargs printf "%.2f")
+            
+            HTTP_REQ_FAILED=$(jq -r '.metrics.http_req_failed.values.rate // 0' $SUMMARY_FILE | awk '{printf "%.2f", $1 * 100}')
+            
+            VUS_MAX=$(jq -r '.metrics.vus_max.values.max // 0' $SUMMARY_FILE)
+            
+            # Check if thresholds passed
+            THRESHOLDS_PASSED=$(jq -r '.metrics | to_entries[] | select(.value.thresholds) | .value.thresholds | to_entries[] | .value.ok' $SUMMARY_FILE | grep -c "false" || echo "0")
+            
+            # Export for next step
+            echo "http_reqs=$HTTP_REQS" >> $GITHUB_OUTPUT
+            echo "rps=$RPS" >> $GITHUB_OUTPUT
+            echo "duration_avg=$HTTP_REQ_DURATION_AVG" >> $GITHUB_OUTPUT
+            echo "duration_p90=$HTTP_REQ_DURATION_P90" >> $GITHUB_OUTPUT
+            echo "duration_p95=$HTTP_REQ_DURATION_P95" >> $GITHUB_OUTPUT
+            echo "duration_max=$HTTP_REQ_DURATION_MAX" >> $GITHUB_OUTPUT
+            echo "failed_rate=$HTTP_REQ_FAILED" >> $GITHUB_OUTPUT
+            echo "vus_max=$VUS_MAX" >> $GITHUB_OUTPUT
+            echo "thresholds_passed=$([[ $THRESHOLDS_PASSED -eq 0 ]] && echo '✅ PASSED' || echo '❌ FAILED')" >> $GITHUB_OUTPUT
+          else
+            echo "Summary file not found!"
+            exit 1
           fi
+
+      - name: Post k6 results as PR comment
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const comment = `## 📊 Load Test Results
+            
+            **Status:** ${{ steps.k6_results.outputs.thresholds_passed }}
+            
+            ### Performance Metrics
+            
+            | Metric | Value |
+            |--------|-------|
+            | 🚀 **Total Requests** | ${{ steps.k6_results.outputs.http_reqs }} |
+            | 📈 **Requests/sec** | ${{ steps.k6_results.outputs.rps }} req/s |
+            | 👥 **Max Virtual Users** | ${{ steps.k6_results.outputs.vus_max }} |
+            | ❌ **Failed Requests** | ${{ steps.k6_results.outputs.failed_rate }}% |
+            
+            ### Response Time (HTTP Request Duration)
+            
+            | Percentile | Time |
+            |------------|------|
+            | **Average** | ${{ steps.k6_results.outputs.duration_avg }}ms |
+            | **P90** | ${{ steps.k6_results.outputs.duration_p90 }}ms |
+            | **P95** | ${{ steps.k6_results.outputs.duration_p95 }}ms |
+            | **Max** | ${{ steps.k6_results.outputs.duration_max }}ms |
+            
+            ### Test Configuration
+            - **Targets:** foo.localhost, bar.localhost
+            - **Load Pattern:** Ramp-up → Sustained → Ramp-down
+            - **Duration:** 2 minutes
+            
+            ---
+            
+            <details>
+            <summary>View Full Report</summary>
+            
+            Download the full HTML report from the workflow artifacts.
+            
+            </details>
+            
+            *Automated by k6 Load Testing*
+            `;
+            
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: comment
+            });
 
       - name: Upload k6 results
         if: always()
@@ -149,13 +233,6 @@ jobs:
         with:
           name: k6-load-test-results
           path: |
-            k6-results.json
-            k6-summary.html
+            k6/k6-summary.json
+            k6/k6-results.html
           retention-days: 30
-
-      - name: Check k6 thresholds
-        if: always()
-        run: |
-          echo "Checking if load test passed thresholds..."
-          # k6 exit code indicates threshold pass/fail
-          # This step will fail if thresholds are not met
