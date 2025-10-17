@@ -6,12 +6,22 @@ on:
       - main
 
 jobs:
-  build:
+  build-and-test:
+    name: Build and Test with a KinD cluster
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Run a one-line script
-        run: echo "CI workflow successfully triggered for this pull request!"
+      - name: Create 2-node KinD Cluster
+        uses: helm/kind-action@v1.10.0
+        with:
+          config: kind-config/kind-config.yaml
+          cluster_name: ci-cluster
+
+      - name: Verify Cluster and Nodes
+        run: |
+          echo "Current kubectl context:"
+          kubectl cluster-info
+          echo -e "\n\nCluster nodes:"
+          kubectl get nodes -o wide
