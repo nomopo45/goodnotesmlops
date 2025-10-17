@@ -5,6 +5,11 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  
 jobs:
   build-and-test:
     name: Build and Test with a KinD cluster
@@ -19,7 +24,7 @@ jobs:
           config: kind-config/kind-config.yaml
           cluster_name: ci-cluster
 
-      - name: Deploy NGINX Ingress Controller 🚪
+      - name: Deploy NGINX Ingress Controller
         run: |
           # Apply the Ingress controller manifest recommended for KinD
           kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
@@ -123,5 +128,120 @@ jobs:
           if [[ "$HTTP_CODE" == "404" ]]; then
             echo "Invalid hostname correctly rejected with 404"
           else
-            echo "⚠️ Expected 404 for invalid hostname, got: $HTTP_CODE"
+            echo "Expected 404 for invalid hostname, got: $HTTP_CODE"
           fi
+
+      - name: Setup k6
+        uses: grafana/setup-k6-action@v1
+
+      - name: Run k6 load test
+        id: k6_test
+        continue-on-error: true
+        run: |
+          cd k6
+          k6 run load-test.js
+
+      - name: Move results to k6 directory
+        if: always()
+        run: |
+          # Results are generated in k6/ directory already since we cd'd there
+          ls -la k6/
+          
+      - name: Parse k6 results
+        if: always()
+        id: k6_results
+        run: |
+          SUMMARY_FILE="k6/k6-summary.json"
+          
+          if [ ! -f "$SUMMARY_FILE" ]; then
+            echo "Summary file not found!"
+            echo "Contents of k6/:"
+            ls -la k6/
+            exit 1
+          fi
+          
+          echo "✅ Summary file found"
+          
+          # Extract metrics using jq
+          HTTP_REQS=$(jq -r '.metrics.http_reqs.values.count // 0' $SUMMARY_FILE)
+          RPS=$(jq -r '.metrics.http_reqs.values.rate // 0' $SUMMARY_FILE | xargs printf "%.2f")
+          DURATION_AVG=$(jq -r '.metrics.http_req_duration.values.avg // 0' $SUMMARY_FILE | xargs printf "%.2f")
+          DURATION_P90=$(jq -r '.metrics.http_req_duration.values["p(90)"] // 0' $SUMMARY_FILE | xargs printf "%.2f")
+          DURATION_P95=$(jq -r '.metrics.http_req_duration.values["p(95)"] // 0' $SUMMARY_FILE | xargs printf "%.2f")
+          DURATION_MAX=$(jq -r '.metrics.http_req_duration.values.max // 0' $SUMMARY_FILE | xargs printf "%.2f")
+          FAILED_RATE=$(jq -r '.metrics.http_req_failed.values.rate // 0' $SUMMARY_FILE | awk '{printf "%.2f", $1 * 100}')
+          VUS_MAX=$(jq -r '.metrics.vus_max.values.max // 0' $SUMMARY_FILE)
+          
+          # Export outputs
+          echo "http_reqs=$HTTP_REQS" >> $GITHUB_OUTPUT
+          echo "rps=$RPS" >> $GITHUB_OUTPUT
+          echo "duration_avg=$DURATION_AVG" >> $GITHUB_OUTPUT
+          echo "duration_p90=$DURATION_P90" >> $GITHUB_OUTPUT
+          echo "duration_p95=$DURATION_P95" >> $GITHUB_OUTPUT
+          echo "duration_max=$DURATION_MAX" >> $GITHUB_OUTPUT
+          echo "failed_rate=$FAILED_RATE" >> $GITHUB_OUTPUT
+          echo "vus_max=$VUS_MAX" >> $GITHUB_OUTPUT
+          
+          # Check thresholds
+          THRESHOLDS_FAILED=$(jq -r '[.metrics | to_entries[] | select(.value.thresholds) | .value.thresholds | to_entries[] | select(.value.ok == false)] | length' $SUMMARY_FILE)
+          if [ "$THRESHOLDS_FAILED" -eq 0 ]; then
+            echo "thresholds_passed=✅ PASSED" >> $GITHUB_OUTPUT
+          else
+            echo "thresholds_passed=❌ FAILED ($THRESHOLDS_FAILED threshold(s) failed)" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post k6 results as PR comment
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const comment = `## 📊 Load Test Results
+            
+            **Status:** ${{ steps.k6_results.outputs.thresholds_passed }}
+            
+            ### Performance Metrics
+            
+            | Metric | Value |
+            |--------|-------|
+            | 🚀 **Total Requests** | ${{ steps.k6_results.outputs.http_reqs }} |
+            | 📈 **Requests/sec** | ${{ steps.k6_results.outputs.rps }} req/s |
+            | 👥 **Max Virtual Users** | ${{ steps.k6_results.outputs.vus_max }} |
+            | ❌ **Failed Requests** | ${{ steps.k6_results.outputs.failed_rate }}% |
+            
+            ### Response Time (HTTP Request Duration)
+            
+            | Percentile | Time |
+            |------------|------|
+            | **Average** | ${{ steps.k6_results.outputs.duration_avg }}ms |
+            | **P90** | ${{ steps.k6_results.outputs.duration_p90 }}ms |
+            | **P95** | ${{ steps.k6_results.outputs.duration_p95 }}ms |
+            | **Max** | ${{ steps.k6_results.outputs.duration_max }}ms |
+            
+            ### Test Details
+            - **Hosts Tested:** \`foo.localhost\`, \`bar.localhost\`
+            - **Traffic Pattern:** Randomized across both hosts
+            - **Test Duration:** 2 minutes
+            - **Load Pattern:** Ramp-up (30s) → Sustained (1m) → Ramp-down (30s)
+            
+            ---
+            *🤖 Automated by k6 Load Testing | [View Artifacts](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})*
+            `;
+            
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: comment
+            });
+
+      - name: Upload k6 results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-load-test-results
+          path: |
+            k6/k6-summary.json
+            k6/k6-results.html
+          retention-days: 1
+
