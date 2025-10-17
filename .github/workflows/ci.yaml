@@ -48,3 +48,64 @@ jobs:
           # The -f flag makes curl treat HTTP errors (like 404) as a failure,
           # so we invert the exit code with '!' to make the step succeed.
           ! curl -f http://localhost/
+
+      # Task 4: Deploy http-echo applications
+      - name: Deploy foo and bar applications
+        run: |
+          echo "Deploying foo and bar applications..."
+          kubectl apply -f k8s/http-echo-deployments.yaml
+          
+          echo "Waiting for deployments to be ready..."
+          kubectl rollout status deployment/foo-app --timeout=2m
+          kubectl rollout status deployment/bar-app --timeout=2m
+          
+          echo "Applications deployed successfully"
+
+      - name: Verify deployments
+        run: |
+          echo "=== Foo Deployment ==="
+          kubectl get deployment foo-app
+          kubectl get pods -l app=foo
+          
+          echo "=== Bar Deployment ==="
+          kubectl get deployment bar-app
+          kubectl get pods -l app=bar
+          
+          echo "=== Services ==="
+          kubectl get svc foo-service bar-service
+
+      - name: Create Ingress for http-echo
+        run: |
+          echo "Creating Ingress resource..."
+          kubectl apply -f k8s/http-echo-ingress.yaml
+          
+          echo "Waiting for Ingress to be ready..."
+          sleep 10
+          kubectl get ingress echo-ingress
+          kubectl describe ingress echo-ingress
+
+      - name: Test http-echo endpoints
+        run: |
+          echo "Testing /foo endpoint..."
+          RESPONSE=$(curl -s http://localhost/foo)
+          echo "Response: $RESPONSE"
+          if [[ "$RESPONSE" == *"foo"* ]]; then
+            echo "/foo endpoint working correctly"
+          else
+            echo "/foo endpoint failed"
+            exit 1
+          fi
+          
+          echo ""
+          echo "Testing /bar endpoint..."
+          RESPONSE=$(curl -s http://localhost/bar)
+          echo "Response: $RESPONSE"
+          if [[ "$RESPONSE" == *"bar"* ]]; then
+            echo "/bar endpoint working correctly"
+          else
+            echo "/bar endpoint failed"
+            exit 1
+          fi
+          
+          echo ""
+          echo "All tests passed!"
