@@ -84,26 +84,30 @@ jobs:
           kubectl get ingress echo-ingress
           kubectl describe ingress echo-ingress
 
-      - name: Test http-echo endpoints
+      - name: Test host-based routing with Host headers
         run: |
-          echo "Testing /foo endpoint..."
-          RESPONSE=$(curl -s http://localhost/foo)
+          echo "Testing foo.localhost with Host header..."
+          RESPONSE=$(curl -s -H "Host: foo.localhost" http://localhost/)
           echo "Response: $RESPONSE"
           if [[ "$RESPONSE" == *"foo"* ]]; then
-            echo "/foo endpoint working correctly"
+            echo "foo.localhost routing working correctly"
           else
-            echo "/foo endpoint failed"
+            echo "foo.localhost routing failed"
+            echo "Expected: foo"
+            echo "Got: $RESPONSE"
             exit 1
           fi
           
           echo ""
-          echo "Testing /bar endpoint..."
-          RESPONSE=$(curl -s http://localhost/bar)
+          echo "Testing bar.localhost with Host header..."
+          RESPONSE=$(curl -s -H "Host: bar.localhost" http://localhost/)
           echo "Response: $RESPONSE"
           if [[ "$RESPONSE" == *"bar"* ]]; then
-            echo "/bar endpoint working correctly"
+            echo "bar.localhost routing working correctly"
           else
-            echo "/bar endpoint failed"
+            echo "bar.localhost routing failed"
+            echo "Expected: bar"
+            echo "Got: $RESPONSE"
             exit 1
           fi
           
