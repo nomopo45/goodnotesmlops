@@ -1,0 +1,82 @@
+# Foo Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: foo-app
+  labels:
+    app: foo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: foo
+  template:
+    metadata:
+      labels:
+        app: foo
+    spec:
+      containers:
+      - name: http-echo
+        image: hashicorp/http-echo:latest
+        args:
+          - "-text=foo"
+        ports:
+        - containerPort: 5678
+          name: http
+
+---
+# Foo Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: foo-service
+spec:
+  selector:
+    app: foo
+  ports:
+  - port: 5678
+    targetPort: 5678
+    protocol: TCP
+    name: http
+
+---
+# Bar Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bar-app
+  labels:
+    app: bar
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bar
+  template:
+    metadata:
+      labels:
+        app: bar
+    spec:
+      containers:
+      - name: http-echo
+        image: hashicorp/http-echo:latest
+        args:
+          - "-text=bar"
+        ports:
+        - containerPort: 5678
+          name: http
+
+---
+# Bar Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: bar-service
+spec:
+  selector:
+    app: bar
+  ports:
+  - port: 5678
+    targetPort: 5678
+    protocol: TCP
+    name: http
