@@ -41,27 +41,6 @@ export default function () {
   
   sleep(Math.random() * 1.5 + 0.5);
 }
-  
-  // Check response
-  const checkResult = check(response, {
-    'status is 200': (r) => r.status === 200,
-    'response time < 500ms': (r) => r.timings.duration < 500,
-    'body contains expected text': (r) => {
-      if (selectedHost === 'foo.localhost') {
-        return r.body.includes('foo');
-      } else if (selectedHost === 'bar.localhost') {
-        return r.body.includes('bar');
-      }
-      return false;
-    },
-  });
-  
-  // Track errors
-  errorRate.add(!checkResult);
-  
-  // Random sleep between 0.5 and 2 seconds
-  sleep(Math.random() * 1.5 + 0.5);
-}
 
 // Custom summary to export results
 export function handleSummary(data) {
