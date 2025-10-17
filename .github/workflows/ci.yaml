@@ -333,6 +333,16 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            // Parse metrics and add status indicators
+            const memPeak = parseFloat('${{ steps.peak_metrics.outputs.mem_peak }}');
+            const cpuAvg = parseFloat('${{ steps.peak_metrics.outputs.cpu_avg }}');
+            const podRestarts = parseInt('${{ steps.peak_metrics.outputs.pod_restarts }}');
+            
+            const memStatus = memPeak < 200 ? '✅' : '⚠️';
+            const cpuStatus = cpuAvg < 0.5 ? '✅' : '⚠️';
+            const restartStatus = podRestarts === 0 ? '✅' : '⚠️';
+            const cpuPercent = (cpuAvg * 100).toFixed(1);
+            
             const comment = `## 📊 Load Test Results with Resource Monitoring
             
             **Status:** ${{ steps.k6_results.outputs.thresholds_passed }}
@@ -368,9 +378,9 @@ jobs:
             
             | Metric | Value | Status |
             |--------|-------|--------|
-            | **Pod Restarts** | ${{ steps.peak_metrics.outputs.pod_restarts }} | ${{ steps.peak_metrics.outputs.pod_restarts == '0' && '✅' || '⚠️' }} |
-            | **Memory Growth** | ${{ steps.peak_metrics.outputs.mem_peak }} MB (peak) | ${{ parseFloat(steps.peak_metrics.outputs.mem_peak) < 200 && '✅' || '⚠️' }} |
-            | **CPU Utilization** | ${{ (parseFloat(steps.peak_metrics.outputs.cpu_avg) * 100).toFixed(1) }}% avg | ${{ parseFloat(steps.peak_metrics.outputs.cpu_avg) < 0.5 && '✅' || '⚠️' }} |
+            | **Pod Restarts** | ${podRestarts} | ${restartStatus} |
+            | **Memory Peak** | ${memPeak.toFixed(2)} MB | ${memStatus} |
+            | **CPU Utilization** | ${cpuPercent}% avg | ${cpuStatus} |
             
             ### 📋 Test Configuration
             - **Hosts Tested:** \`foo.localhost\`, \`bar.localhost\`
