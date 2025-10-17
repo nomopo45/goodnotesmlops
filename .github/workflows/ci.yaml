@@ -19,9 +19,32 @@ jobs:
           config: kind-config/kind-config.yaml
           cluster_name: ci-cluster
 
+      - name: Deploy NGINX Ingress Controller 🚪
+        run: |
+          # Apply the Ingress controller manifest recommended for KinD
+          kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
+
+          # Wait for the Ingress controller to be ready before proceeding
+          echo "Waiting for Ingress controller to be ready..."
+          kubectl wait --namespace ingress-nginx \
+            --for=condition=ready pod \
+            --selector=app.kubernetes.io/component=controller \
+            --timeout=120s
+
       - name: Verify Cluster and Nodes
         run: |
           echo "Current kubectl context:"
           kubectl cluster-info
           echo -e "\n\nCluster nodes:"
           kubectl get nodes -o wide
+          echo -e "\n\nIngress pods:"
+          kubectl get pods -n ingress-nginx
+
+      - name: Test Ingress Controller Access
+        run: |
+          echo "Attempting to curl the Ingress controller via localhost..."
+          # We expect a 404 Not Found, which is a success (it doesn't have any Ingress rules configured yet).
+          # It proves the NGINX controller is up and responding to HTTP requests.
+          # The -f flag makes curl treat HTTP errors (like 404) as a failure,
+          # so we invert the exit code with '!' to make the step succeed.
+          ! curl -f http://localhost/
