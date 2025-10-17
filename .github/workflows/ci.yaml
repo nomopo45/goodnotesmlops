@@ -108,8 +108,20 @@ jobs:
           fi
           
           echo ""
-          echo "All tests passed!"
+          echo "All host-based routing tests passed!"
 
+      - name: Test invalid hostname (should fail)
+        run: |
+          echo "Testing invalid hostname (should not route)..."
+          RESPONSE=$(curl -s -w "\n%{http_code}" -H "Host: invalid.localhost" http://localhost/)
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          
+          if [[ "$HTTP_CODE" == "404" ]]; then
+            echo "Invalid hostname correctly rejected with 404"
+          else
+            echo "Expected 404 for invalid hostname, got: $HTTP_CODE"
+          fi
+      
       - name: Setup k6
         uses: grafana/setup-k6-action@v1
         with:
