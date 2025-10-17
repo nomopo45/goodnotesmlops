@@ -18,6 +18,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'v3.14.0'
+
       - name: Create 2-node KinD Cluster
         uses: helm/kind-action@v1.10.0
         with:
@@ -130,6 +135,77 @@ jobs:
           else
             echo "Expected 404 for invalid hostname, got: $HTTP_CODE"
           fi
+      - name: Deploy Prometheus Stack
+        run: |
+          echo "Installing Prometheus..."
+          
+          # Add Prometheus Helm repo
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+          
+          # Create monitoring namespace
+          kubectl create namespace monitoring
+          
+          # Install kube-prometheus-stack with minimal resources for CI
+          helm install prometheus prometheus-community/kube-prometheus-stack \
+            --namespace monitoring \
+            --set prometheus.service.type=NodePort \
+            --set prometheus.service.nodePort=30090 \
+            --set grafana.enabled=false \
+            --set alertmanager.enabled=false \
+            --set prometheus.prometheusSpec.resources.requests.memory=512Mi \
+            --set prometheus.prometheusSpec.resources.limits.memory=1Gi \
+            --set prometheus.prometheusSpec.retention=2h \
+            --set prometheus.prometheusSpec.scrapeInterval=5s \
+            --wait --timeout=5m
+          
+          echo "Prometheus installed"
+
+      - name: Verify Prometheus is ready
+        run: |
+          kubectl wait --namespace monitoring \
+            --for=condition=ready pod \
+            --selector=app.kubernetes.io/name=prometheus \
+            --timeout=3m
+          
+          # Port forward Prometheus to localhost
+          kubectl port-forward -n monitoring svc/prometheus-kube-prometheus-prometheus 9090:9090 &
+          sleep 10
+          
+          # Test Prometheus API
+          curl -s http://localhost:9090/api/v1/query?query=up | jq .
+          
+          echo "Prometheus is accessible"
+      
+      - name: Deploy monitoring
+        run: |
+          kubectl apply -f k8s/servicemonitor.yaml
+
+      - name: Capture baseline metrics
+        id: baseline
+        run: |
+          echo "Capturing baseline metrics..."
+          
+          # CPU usage baseline
+          CPU_BASELINE=$(curl -s 'http://localhost:9090/api/v1/query' \
+            --data-urlencode 'query=sum(rate(container_cpu_usage_seconds_total{namespace="default",pod=~".*-app-.*"}[1m]))' \
+            | jq -r '.data.result[0].value[1] // "0"')
+          
+          # Memory usage baseline
+          MEM_BASELINE=$(curl -s 'http://localhost:9090/api/v1/query' \
+            --data-urlencode 'query=sum(container_memory_working_set_bytes{namespace="default",pod=~".*-app-.*"}) / 1024 / 1024' \
+            | jq -r '.data.result[0].value[1] // "0"')
+          
+          # Network traffic baseline
+          NET_RX_BASELINE=$(curl -s 'http://localhost:9090/api/v1/query' \
+            --data-urlencode 'query=sum(rate(container_network_receive_bytes_total{namespace="default",pod=~".*-app-.*"}[1m])) / 1024' \
+            | jq -r '.data.result[0].value[1] // "0"')
+          
+          echo "cpu_baseline=$CPU_BASELINE" >> $GITHUB_OUTPUT
+          echo "mem_baseline=$MEM_BASELINE" >> $GITHUB_OUTPUT
+          echo "net_rx_baseline=$NET_RX_BASELINE" >> $GITHUB_OUTPUT
+          
+          echo "Baseline - CPU: ${CPU_BASELINE} cores, Memory: ${MEM_BASELINE} MB, Network RX: ${NET_RX_BASELINE} KB/s"
 
       - name: Setup k6
         uses: grafana/setup-k6-action@v1
@@ -190,26 +266,87 @@ jobs:
             echo "thresholds_passed=❌ FAILED ($THRESHOLDS_FAILED threshold(s) failed)" >> $GITHUB_OUTPUT
           fi
 
-      - name: Post k6 results as PR comment
+      - name: Capture peak metrics during load test
+        id: peak_metrics
+        if: always()
+        run: |
+          echo "📊 Capturing peak metrics..."
+          
+          # Get time range for the load test (last 3 minutes)
+          END_TIME=$(date +%s)
+          START_TIME=$((END_TIME - 180))
+          
+          # CPU usage peak
+          CPU_PEAK=$(curl -s 'http://localhost:9090/api/v1/query' \
+            --data-urlencode "query=max_over_time(sum(rate(container_cpu_usage_seconds_total{namespace=\"default\",pod=~\".*-app-.*\"}[1m]))[$((END_TIME - START_TIME))s])" \
+            | jq -r '.data.result[0].value[1] // "0"' | xargs printf "%.4f")
+          
+          # CPU average during test
+          CPU_AVG=$(curl -s 'http://localhost:9090/api/v1/query' \
+            --data-urlencode "query=avg_over_time(sum(rate(container_cpu_usage_seconds_total{namespace=\"default\",pod=~\".*-app-.*\"}[1m]))[$((END_TIME - START_TIME))s])" \
+            | jq -r '.data.result[0].value[1] // "0"' | xargs printf "%.4f")
+          
+          # Memory peak (MB)
+          MEM_PEAK=$(curl -s 'http://localhost:9090/api/v1/query' \
+            --data-urlencode "query=max_over_time(sum(container_memory_working_set_bytes{namespace=\"default\",pod=~\".*-app-.*\"})[$((END_TIME - START_TIME))s]) / 1024 / 1024" \
+            | jq -r '.data.result[0].value[1] // "0"' | xargs printf "%.2f")
+          
+          # Memory average (MB)
+          MEM_AVG=$(curl -s 'http://localhost:9090/api/v1/query' \
+            --data-urlencode "query=avg_over_time(sum(container_memory_working_set_bytes{namespace=\"default\",pod=~\".*-app-.*\"})[$((END_TIME - START_TIME))s]) / 1024 / 1024" \
+            | jq -r '.data.result[0].value[1] // "0"' | xargs printf "%.2f")
+          
+          # Network RX (KB/s)
+          NET_RX_PEAK=$(curl -s 'http://localhost:9090/api/v1/query' \
+            --data-urlencode "query=max_over_time(sum(rate(container_network_receive_bytes_total{namespace=\"default\",pod=~\".*-app-.*\"}[1m]))[$((END_TIME - START_TIME))s]) / 1024" \
+            | jq -r '.data.result[0].value[1] // "0"' | xargs printf "%.2f")
+          
+          # Network TX (KB/s)
+          NET_TX_PEAK=$(curl -s 'http://localhost:9090/api/v1/query' \
+            --data-urlencode "query=max_over_time(sum(rate(container_network_transmit_bytes_total{namespace=\"default\",pod=~\".*-app-.*\"}[1m]))[$((END_TIME - START_TIME))s]) / 1024" \
+            | jq -r '.data.result[0].value[1] // "0"' | xargs printf "%.2f")
+          
+          # Pod restart count
+          POD_RESTARTS=$(curl -s 'http://localhost:9090/api/v1/query' \
+            --data-urlencode 'query=sum(kube_pod_container_status_restarts_total{namespace="default",pod=~".*-app-.*"})' \
+            | jq -r '.data.result[0].value[1] // "0"')
+          
+          # Export outputs
+          echo "cpu_peak=$CPU_PEAK" >> $GITHUB_OUTPUT
+          echo "cpu_avg=$CPU_AVG" >> $GITHUB_OUTPUT
+          echo "mem_peak=$MEM_PEAK" >> $GITHUB_OUTPUT
+          echo "mem_avg=$MEM_AVG" >> $GITHUB_OUTPUT
+          echo "net_rx_peak=$NET_RX_PEAK" >> $GITHUB_OUTPUT
+          echo "net_tx_peak=$NET_TX_PEAK" >> $GITHUB_OUTPUT
+          echo "pod_restarts=$POD_RESTARTS" >> $GITHUB_OUTPUT
+          
+          echo "Peak Metrics:"
+          echo "  CPU: ${CPU_AVG} cores (avg), ${CPU_PEAK} cores (peak)"
+          echo "  Memory: ${MEM_AVG} MB (avg), ${MEM_PEAK} MB (peak)"
+          echo "  Network RX: ${NET_RX_PEAK} KB/s (peak)"
+          echo "  Network TX: ${NET_TX_PEAK} KB/s (peak)"
+          echo "  Pod Restarts: ${POD_RESTARTS}"
+
+      - name: Post enhanced k6 results with resource metrics
         if: github.event_name == 'pull_request' && always()
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const comment = `## 📊 Load Test Results
+            const comment = `## 📊 Load Test Results with Resource Monitoring
             
             **Status:** ${{ steps.k6_results.outputs.thresholds_passed }}
             
-            ### Performance Metrics
+            ### 🚀 Performance Metrics (k6)
             
             | Metric | Value |
             |--------|-------|
-            | 🚀 **Total Requests** | ${{ steps.k6_results.outputs.http_reqs }} |
-            | 📈 **Requests/sec** | ${{ steps.k6_results.outputs.rps }} req/s |
-            | 👥 **Max Virtual Users** | ${{ steps.k6_results.outputs.vus_max }} |
-            | ❌ **Failed Requests** | ${{ steps.k6_results.outputs.failed_rate }}% |
+            | **Total Requests** | ${{ steps.k6_results.outputs.http_reqs }} |
+            | **Requests/sec** | ${{ steps.k6_results.outputs.rps }} req/s |
+            | **Max Virtual Users** | ${{ steps.k6_results.outputs.vus_max }} |
+            | **Failed Requests** | ${{ steps.k6_results.outputs.failed_rate }}% |
             
-            ### Response Time (HTTP Request Duration)
+            ### ⏱️ Response Time (HTTP Request Duration)
             
             | Percentile | Time |
             |------------|------|
@@ -218,14 +355,32 @@ jobs:
             | **P95** | ${{ steps.k6_results.outputs.duration_p95 }}ms |
             | **Max** | ${{ steps.k6_results.outputs.duration_max }}ms |
             
-            ### Test Details
+            ### 💻 Resource Utilization (Prometheus)
+            
+            | Resource | Baseline | Average | Peak |
+            |----------|----------|---------|------|
+            | **CPU** | ${{ steps.baseline.outputs.cpu_baseline }} cores | ${{ steps.peak_metrics.outputs.cpu_avg }} cores | ${{ steps.peak_metrics.outputs.cpu_peak }} cores |
+            | **Memory** | ${{ steps.baseline.outputs.mem_baseline }} MB | ${{ steps.peak_metrics.outputs.mem_avg }} MB | ${{ steps.peak_metrics.outputs.mem_peak }} MB |
+            | **Network RX** | ${{ steps.baseline.outputs.net_rx_baseline }} KB/s | - | ${{ steps.peak_metrics.outputs.net_rx_peak }} KB/s |
+            | **Network TX** | - | - | ${{ steps.peak_metrics.outputs.net_tx_peak }} KB/s |
+            
+            ### 🔍 Stability Metrics
+            
+            | Metric | Value | Status |
+            |--------|-------|--------|
+            | **Pod Restarts** | ${{ steps.peak_metrics.outputs.pod_restarts }} | ${{ steps.peak_metrics.outputs.pod_restarts == '0' && '✅' || '⚠️' }} |
+            | **Memory Growth** | ${{ steps.peak_metrics.outputs.mem_peak }} MB (peak) | ${{ parseFloat(steps.peak_metrics.outputs.mem_peak) < 200 && '✅' || '⚠️' }} |
+            | **CPU Utilization** | ${{ (parseFloat(steps.peak_metrics.outputs.cpu_avg) * 100).toFixed(1) }}% avg | ${{ parseFloat(steps.peak_metrics.outputs.cpu_avg) < 0.5 && '✅' || '⚠️' }} |
+            
+            ### 📋 Test Configuration
             - **Hosts Tested:** \`foo.localhost\`, \`bar.localhost\`
             - **Traffic Pattern:** Randomized across both hosts
             - **Test Duration:** 2 minutes
             - **Load Pattern:** Ramp-up (30s) → Sustained (1m) → Ramp-down (30s)
+            - **Monitoring:** Prometheus with 5s scrape interval
             
             ---
-            *🤖 Automated by k6 Load Testing | [View Artifacts](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})*
+            *🤖 Automated by k6 + Prometheus | [View Artifacts](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})*
             `;
             
             github.rest.issues.createComment({
