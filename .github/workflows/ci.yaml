@@ -207,6 +207,31 @@ jobs:
           
           echo "Baseline - CPU: ${CPU_BASELINE} cores, Memory: ${MEM_BASELINE} MB, Network RX: ${NET_RX_BASELINE} KB/s"
 
+      - name: Debug - Check available metrics
+        run: |
+          echo "Checking what metrics are available..."
+          
+          # List all available metrics
+          curl -s 'http://localhost:9090/api/v1/label/__name__/values' | jq -r '.data[]' | grep -i container | head -20
+          
+          # Check if our pods are being scraped
+          echo -e "\nChecking for our app pods:"
+          curl -s 'http://localhost:9090/api/v1/query' \
+            --data-urlencode 'query=up{namespace="default"}' \
+            | jq .
+          
+          # Check CPU metrics specifically
+          echo -e "\nChecking CPU metrics:"
+          curl -s 'http://localhost:9090/api/v1/query' \
+            --data-urlencode 'query=container_cpu_usage_seconds_total{namespace="default"}' \
+            | jq '.data.result | length'
+          
+          # Check memory metrics
+          echo -e "\nChecking memory metrics:"
+          curl -s 'http://localhost:9090/api/v1/query' \
+            --data-urlencode 'query=container_memory_working_set_bytes{namespace="default"}' \
+            | jq '.data.result | length'
+
       - name: Setup k6
         uses: grafana/setup-k6-action@v1
 
@@ -270,45 +295,45 @@ jobs:
         id: peak_metrics
         if: always()
         run: |
-          echo "📊 Capturing peak metrics..."
+          echo "Waiting for metrics to be collected..."
+          sleep 30  # Give Prometheus time to scrape during/after load test
           
-          # Get time range for the load test (last 3 minutes)
-          END_TIME=$(date +%s)
-          START_TIME=$((END_TIME - 180))
+          echo "Capturing peak metrics..."
           
-          # CPU usage peak
+          # Use simpler queries with fixed time ranges
+          # CPU usage peak (last 3 minutes)
           CPU_PEAK=$(curl -s 'http://localhost:9090/api/v1/query' \
-            --data-urlencode "query=max_over_time(sum(rate(container_cpu_usage_seconds_total{namespace=\"default\",pod=~\".*-app-.*\"}[1m]))[$((END_TIME - START_TIME))s])" \
+            --data-urlencode 'query=max_over_time(sum(rate(container_cpu_usage_seconds_total{namespace="default",pod=~"foo-app.*|bar-app.*",container!=""}[1m]))[3m:5s])' \
             | jq -r '.data.result[0].value[1] // "0"' | xargs printf "%.4f")
           
           # CPU average during test
           CPU_AVG=$(curl -s 'http://localhost:9090/api/v1/query' \
-            --data-urlencode "query=avg_over_time(sum(rate(container_cpu_usage_seconds_total{namespace=\"default\",pod=~\".*-app-.*\"}[1m]))[$((END_TIME - START_TIME))s])" \
+            --data-urlencode 'query=avg_over_time(sum(rate(container_cpu_usage_seconds_total{namespace="default",pod=~"foo-app.*|bar-app.*",container!=""}[1m]))[3m:5s])' \
             | jq -r '.data.result[0].value[1] // "0"' | xargs printf "%.4f")
           
-          # Memory peak (MB)
+          # Memory peak (MB) - last 3 minutes
           MEM_PEAK=$(curl -s 'http://localhost:9090/api/v1/query' \
-            --data-urlencode "query=max_over_time(sum(container_memory_working_set_bytes{namespace=\"default\",pod=~\".*-app-.*\"})[$((END_TIME - START_TIME))s]) / 1024 / 1024" \
+            --data-urlencode 'query=max_over_time(sum(container_memory_working_set_bytes{namespace="default",pod=~"foo-app.*|bar-app.*",container!=""})[3m:5s]) / 1024 / 1024' \
             | jq -r '.data.result[0].value[1] // "0"' | xargs printf "%.2f")
           
           # Memory average (MB)
           MEM_AVG=$(curl -s 'http://localhost:9090/api/v1/query' \
-            --data-urlencode "query=avg_over_time(sum(container_memory_working_set_bytes{namespace=\"default\",pod=~\".*-app-.*\"})[$((END_TIME - START_TIME))s]) / 1024 / 1024" \
+            --data-urlencode 'query=avg_over_time(sum(container_memory_working_set_bytes{namespace="default",pod=~"foo-app.*|bar-app.*",container!=""})[3m:5s]) / 1024 / 1024' \
             | jq -r '.data.result[0].value[1] // "0"' | xargs printf "%.2f")
           
           # Network RX (KB/s)
           NET_RX_PEAK=$(curl -s 'http://localhost:9090/api/v1/query' \
-            --data-urlencode "query=max_over_time(sum(rate(container_network_receive_bytes_total{namespace=\"default\",pod=~\".*-app-.*\"}[1m]))[$((END_TIME - START_TIME))s]) / 1024" \
+            --data-urlencode 'query=max_over_time(sum(rate(container_network_receive_bytes_total{namespace="default",pod=~"foo-app.*|bar-app.*"}[1m]))[3m:5s]) / 1024' \
             | jq -r '.data.result[0].value[1] // "0"' | xargs printf "%.2f")
           
           # Network TX (KB/s)
           NET_TX_PEAK=$(curl -s 'http://localhost:9090/api/v1/query' \
-            --data-urlencode "query=max_over_time(sum(rate(container_network_transmit_bytes_total{namespace=\"default\",pod=~\".*-app-.*\"}[1m]))[$((END_TIME - START_TIME))s]) / 1024" \
+            --data-urlencode 'query=max_over_time(sum(rate(container_network_transmit_bytes_total{namespace="default",pod=~"foo-app.*|bar-app.*"}[1m]))[3m:5s]) / 1024' \
             | jq -r '.data.result[0].value[1] // "0"' | xargs printf "%.2f")
           
           # Pod restart count
           POD_RESTARTS=$(curl -s 'http://localhost:9090/api/v1/query' \
-            --data-urlencode 'query=sum(kube_pod_container_status_restarts_total{namespace="default",pod=~".*-app-.*"})' \
+            --data-urlencode 'query=sum(kube_pod_container_status_restarts_total{namespace="default",pod=~"foo-app.*|bar-app.*"})' \
             | jq -r '.data.result[0].value[1] // "0"')
           
           # Export outputs
